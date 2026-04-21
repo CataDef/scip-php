@@ -275,10 +275,17 @@ final class Composer
                 }
                 $paths = is_string($paths) ? [$paths] : $paths;
                 foreach ($paths as $path) {
-                    if (!is_string($path) || $path === '') {
+                    if (!is_string($path)) {
                         continue;
                     }
-                    $p = self::join($this->projectRoot, $path);
+                    // CataDef patch — empty-string path in composer
+                    // psr-4 map means "the project root itself is
+                    // the namespace anchor" (symfony/console, and
+                    // plenty of other libraries, use this form).
+                    // Upstream skipped empty paths and silently
+                    // indexed nothing on those projects.
+                    $effectivePath = ($path === '') ? '.' : $path;
+                    $p = self::join($this->projectRoot, $effectivePath);
                     $p = rtrim($p, DIRECTORY_SEPARATOR);
                     $generator->scanPaths($p, $exclusionRegex, $t, $ns);
                 }
@@ -298,30 +305,58 @@ final class Composer
         // surface; dropping them takes file-coverage from ~95% to
         // ~78%. We union classmap-hits with a full .php walk under
         // the same paths the classmap covered.
-        $functionOnly = [];
+        // Collect every dir we've been asked to walk — classmap +
+        // psr-4 + psr-0 — and enumerate ALL .php under each so
+        // function-only files (which ClassMapGenerator drops) come
+        // through.
+        $walkDirs = [];
         if (is_array($autoload['classmap'] ?? null)) {
             foreach ($autoload['classmap'] as $path) {
-                if (!is_string($path) || $path === '') {
+                if (is_string($path)) {
+                    $walkDirs[] = ($path === '') ? '.' : $path;
+                }
+            }
+        }
+        foreach (['psr-4', 'psr-0'] as $t) {
+            if (!is_array($autoload[$t] ?? null)) {
+                continue;
+            }
+            foreach ($autoload[$t] as $paths) {
+                $paths = is_string($paths) ? [$paths] : $paths;
+                if (!is_array($paths)) {
                     continue;
                 }
-                $p = self::join($this->projectRoot, $path);
-                if (!is_dir($p)) {
+                foreach ($paths as $p) {
+                    if (is_string($p)) {
+                        $walkDirs[] = ($p === '') ? '.' : $p;
+                    }
+                }
+            }
+        }
+
+        $functionOnly = [];
+        $seen = [];
+        foreach (array_unique($walkDirs) as $path) {
+            $p = self::join($this->projectRoot, $path);
+            if (!is_dir($p)) {
+                continue;
+            }
+            $iter = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($p, \FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($iter as $item) {
+                if (!$item->isFile()) {
                     continue;
                 }
-                $iter = new \RecursiveIteratorIterator(
-                    new \RecursiveDirectoryIterator($p, \FilesystemIterator::SKIP_DOTS)
-                );
-                foreach ($iter as $item) {
-                    if (!$item->isFile()) {
-                        continue;
-                    }
-                    $realPath = $item->getPathname();
-                    if (substr($realPath, -4) !== '.php') {
-                        continue;
-                    }
-                    if ($exclusionRegex !== null && preg_match($exclusionRegex, $realPath) === 1) {
-                        continue;
-                    }
+                $realPath = $item->getPathname();
+                if (substr($realPath, -4) !== '.php') {
+                    continue;
+                }
+                if ($exclusionRegex !== null && preg_match($exclusionRegex, $realPath) === 1) {
+                    continue;
+                }
+                if (!isset($seen[$realPath])) {
+                    $seen[$realPath] = true;
                     $functionOnly[] = $realPath;
                 }
             }
