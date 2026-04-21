@@ -352,6 +352,18 @@ final class Composer
                 if (substr($realPath, -4) !== '.php') {
                     continue;
                 }
+                // Skip Composer's vendor/ — it's our dependency tree,
+                // not project source. Also skip test-fixture paths
+                // under scip-php itself (the walk is rooted at `.`
+                // for empty psr-4 path, which pulls in vendor/ too).
+                $rel = str_replace('\\', '/', $realPath);
+                if (
+                    strpos($rel, '/vendor/') !== false ||
+                    strpos($rel, '/node_modules/') !== false ||
+                    strpos($rel, '/.git/') !== false
+                ) {
+                    continue;
+                }
                 if ($exclusionRegex !== null && preg_match($exclusionRegex, $realPath) === 1) {
                     continue;
                 }
