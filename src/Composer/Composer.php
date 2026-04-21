@@ -289,11 +289,49 @@ final class Composer
         $map->sort();
         $classFiles = array_unique(array_values($map->getMap()));
 
+        // CataDef patch — enumerate ALL .php under classmap paths.
+        // Upstream only returns files that declare classes, missing
+        // the "function-only" files (C extension stubs, built-in
+        // function definitions like phpstorm-stubs/Core/Core.php
+        // which holds the *entire* PHP built-in function set). For
+        // a stdlib bundle those files carry the majority of the API
+        // surface; dropping them takes file-coverage from ~95% to
+        // ~78%. We union classmap-hits with a full .php walk under
+        // the same paths the classmap covered.
+        $functionOnly = [];
+        if (is_array($autoload['classmap'] ?? null)) {
+            foreach ($autoload['classmap'] as $path) {
+                if (!is_string($path) || $path === '') {
+                    continue;
+                }
+                $p = self::join($this->projectRoot, $path);
+                if (!is_dir($p)) {
+                    continue;
+                }
+                $iter = new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($p, \FilesystemIterator::SKIP_DOTS)
+                );
+                foreach ($iter as $item) {
+                    if (!$item->isFile()) {
+                        continue;
+                    }
+                    $realPath = $item->getPathname();
+                    if (substr($realPath, -4) !== '.php') {
+                        continue;
+                    }
+                    if ($exclusionRegex !== null && preg_match($exclusionRegex, $realPath) === 1) {
+                        continue;
+                    }
+                    $functionOnly[] = $realPath;
+                }
+            }
+        }
+
         if (!is_array($autoload['files'] ?? null)) {
-            return $classFiles;
+            return array_values(array_unique(array_merge($functionOnly, $classFiles)));
         }
         $files = $this->collectPaths($autoload['files']);
-        return array_merge($files, $classFiles);
+        return array_values(array_unique(array_merge($files, $functionOnly, $classFiles)));
     }
 
     /**
